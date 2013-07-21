@@ -57,9 +57,10 @@ static uint8_t twi_masterBufferLength;
 static uint8_t twi_txBuffer[TWI_BUFFER_LENGTH];
 static volatile uint8_t twi_txBufferIndex;
 static volatile uint8_t twi_txBufferLength;
-
+#if (defined(__MSP430_HAS_USCI__) || defined(__MSP430_HAS_EUSCI_B0__))
 static uint8_t twi_rxBuffer[TWI_BUFFER_LENGTH];
 static volatile uint8_t twi_rxBufferIndex;
+#endif
 
 static volatile uint8_t twi_error;
 
@@ -265,6 +266,11 @@ uint8_t twi_readFrom(uint8_t address, uint8_t* data, uint8_t length, uint8_t sen
 #ifdef __MSP430_HAS_USCI__
     twi_state =  TWI_MRX;                     // Master receive mode
     UCB0CTL1 |= UCTXSTT;                      // I2C start condition
+
+    if(length == 1) {                         // When only receiving 1 byte..
+        while(UCB0CTL1 & UCTXSTT);            // Wait for start bit to be sent
+        UCB0CTL1 |= UCTXSTP;                  // Send I2C stop condition after recv
+    }
 #endif
 #ifdef __MSP430_HAS_EUSCI_B0__
     twi_state =  TWI_MRX;                     // Master receive mode
@@ -378,8 +384,15 @@ uint8_t twi_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t wait
 	}
 
 #ifdef __MSP430_HAS_USCI__
-	/* Ensure stop condition got sent before we exit. */
-	while (UCB0CTL1 & UCTXSTP);
+	/* Ensure stop/start condition got sent before we exit. */
+	if(sendStop)
+	{
+		while (UCB0CTL1 & UCTXSTP);	// end with stop condition
+	}
+	else
+	{
+		while (UCB0CTL1 & UCTXSTT);	// end with (re)start condition
+	}
 #endif
 
 	return twi_error;

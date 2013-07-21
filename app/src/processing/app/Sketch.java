@@ -25,6 +25,7 @@ package processing.app;
 
 import processing.app.debug.AvrdudeUploader;
 import processing.app.debug.MSP430Uploader;
+import processing.app.debug.LM4FUploader;
 import processing.app.debug.Compiler;
 import processing.app.debug.RunnerException;
 import processing.app.debug.Sizer;
@@ -51,7 +52,7 @@ import javax.swing.border.TitledBorder;
  */
 public class Sketch {
   static private File tempBuildFolder;
-
+  private String lastPrimaryClassName;
   private Editor editor;
 
   /** main pde file for this sketch. */
@@ -1374,6 +1375,9 @@ public class Sketch {
     for (SketchCode sc : code) {
       if (sc.isExtension("ino") || sc.isExtension("pde")) {
         sc.setPreprocOffset(bigCount);
+        // These #line directives help the compiler report errors with
+        // correct the filename and line number (issue 281 & 907)
+        bigCode.append("#line 1 \"" + sc.getFileName() + "\"\n");
         bigCode.append(sc.getProgram());
         bigCode.append('\n');
         bigCount += sc.getLineCount();
@@ -1543,56 +1547,17 @@ public class Sketch {
   public RunnerException placeException(String message, 
                                         String dotJavaFilename, 
                                         int dotJavaLine) {
-    int codeIndex = 0; //-1;
-    int codeLine = -1;
-
-//    System.out.println("placing " + dotJavaFilename + " " + dotJavaLine);
-//    System.out.println("code count is " + getCodeCount());
-
-    // first check to see if it's a .java file
-    for (int i = 0; i < getCodeCount(); i++) {
-      SketchCode code = getCode(i);
-      if (!code.isExtension(getDefaultExtension())) {
-        if (dotJavaFilename.equals(code.getFileName())) {
-          codeIndex = i;
-          codeLine = dotJavaLine;
-          return new RunnerException(message, codeIndex, codeLine);
-        }
-      }
-    }
-
-    // If not the preprocessed file at this point, then need to get out
-    if (!dotJavaFilename.equals(name + ".cpp")) {
-      return null;
-    }
-
-    // if it's not a .java file, codeIndex will still be 0
-    // this section searches through the list of .pde files
-    codeIndex = 0;
-    for (int i = 0; i < getCodeCount(); i++) {
-      SketchCode code = getCode(i);
-
-      if (code.isExtension(getDefaultExtension())) {
-//        System.out.println("preproc offset is " + code.getPreprocOffset());
-//        System.out.println("looking for line " + dotJavaLine);
-        if (code.getPreprocOffset() <= dotJavaLine) {
-          codeIndex = i;
-//          System.out.println("i'm thinkin file " + i);
-          codeLine = dotJavaLine - code.getPreprocOffset();
-        }
-      }
-    }
-    // could not find a proper line number, so deal with this differently.
-    // but if it was in fact the .java file we're looking for, though, 
-    // send the error message through.
-    // this is necessary because 'import' statements will be at a line
-    // that has a lower number than the preproc offset, for instance.
-//    if (codeLine == -1 && !dotJavaFilename.equals(name + ".java")) {
-//      return null;
-//    }
-    return new RunnerException(message, codeIndex, codeLine);
+     // Placing errors is simple, because we inserted #line directives
+     // into the preprocessed source.  The compiler gives us correct
+     // the file name and line number.  :-)
+     for (int codeIndex = 0; codeIndex < getCodeCount(); codeIndex++) {
+       SketchCode code = getCode(codeIndex);
+       if (dotJavaFilename.equals(code.getFileName())) {
+         return new RunnerException(message, codeIndex, dotJavaLine);
+       }
+     }
+     return null;
   }
-
 
   /**
    * Run the build inside the temporary build folder.
@@ -1619,6 +1584,7 @@ public class Sketch {
     // run the preprocessor
     editor.status.progressUpdate(20);
     String primaryClassName = preprocess(buildPath);
+    lastPrimaryClassName = primaryClassName;
 
     // compile the program. errors will happen as a RunnerException
     // that will bubble up to whomever called build().
@@ -1707,7 +1673,9 @@ public class Sketch {
     //
     if(Base.getArch() == "msp430"){
     	uploader = new MSP430Uploader();
-    } else {
+    }else if (Base.getArch() == "lm4f"){
+        uploader = new LM4FUploader();
+    }else {
     	uploader = new AvrdudeUploader();
     }
 
@@ -1717,7 +1685,29 @@ public class Sketch {
 
     return success ? suggestedClassName : null;
   }
-
+  
+  /**
+   * Uses last primary class name to try to get the hex file path.
+   */
+  public String getSketchHexFilePath(boolean verifyFileExists)
+  {
+  	String s = "";
+  	
+  	if(lastPrimaryClassName!=null)
+	  	if(lastPrimaryClassName.length()>0)
+	  		s = tempBuildFolder.getAbsolutePath() + File.separator + lastPrimaryClassName + ".hex";
+	  	
+  	return s;
+  }
+  
+  /**
+   * Retrieves the temporal build folder
+   */
+  public File getTempBuildFolder()
+  {
+  	return tempBuildFolder.getAbsoluteFile();
+  }
+  
   /**
    * Replace all commented portions of a given String as spaces.
    * Utility function used here and in the preprocessor.

@@ -26,7 +26,7 @@ import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.util.*;
-
+import java.util.regex.*;
 import javax.swing.*;
 
 import processing.app.debug.Compiler;
@@ -43,9 +43,9 @@ import static processing.app.I18n._;
  */
 public class Base {
   public static final int REVISION = 101;
-  public static final int EREVISION = 8;
+  public static final int EREVISION = 9;
   /** This might be replaced by main() if there's a lib/version.txt file. */
-  static String VERSION_NAME = "0101E0008";
+  static String VERSION_NAME = "0101E0009";
   /** Set true if this a proper release rather than a numbered revision. */
   static public boolean RELEASE = false;
 
@@ -67,6 +67,7 @@ public class Base {
   static {
     archMap.put("arduino", "avr");
     archMap.put("msp430", "msp430");
+    archMap.put("lm4f", "lm4f");
   }
   static Platform platform;
 
@@ -250,6 +251,8 @@ public class Base {
     String targetLibDir = new String("");
     if(Preferences.get("target").equals("msp430")) 
     	targetLibDir = "hardware/msp430/";
+    else if (Preferences.get("target").equals("lm4f"))
+    	targetLibDir = "hardware/lm4f/";
     librariesFolder = getContentFile(targetLibDir + "libraries");
     toolsFolder = getContentFile("tools");
 
@@ -557,7 +560,10 @@ public class Base {
 
     // Make an empty pde file
     File newbieFile = new File(newbieDir, newbieName + ".ino");
-    new FileOutputStream(newbieFile);  // create the file
+    FileOutputStream f = new FileOutputStream(newbieFile);  // create the file
+    f.write(("void setup()\n{\n  // put your setup code here, to run once:\n  "+
+    	"\n}\n\nvoid loop()\n{\n  // put your main code here, to run repeatedly:\n  \n}").getBytes());
+    f.close();
     return newbieFile.getAbsolutePath();
   }
 
@@ -580,6 +586,49 @@ public class Base {
     }
   }
 
+  private void findInsertPoint(Editor editor)
+  {
+    // Find the start point
+    String t = editor.getText();
+    
+    try {
+		Pattern regex = Pattern.compile("void\\s+setup\\s*\\(\\s*\\)");
+		Matcher regexMatcher = regex.matcher(t);
+		while (regexMatcher.find()) 
+		{
+			int totalLeftBracketsOpened = 0;
+			
+			for(int i = regexMatcher.end(); i<t.length(); i++)
+			{
+				// Search the closing bracket
+				if(t.charAt(i)=='{')
+					totalLeftBracketsOpened++;
+				else
+					if(t.charAt(i)=='}')
+					{
+						if(--totalLeftBracketsOpened==0)
+						{
+							// Find input point here
+							for(int j = i-1; j > regexMatcher.end();j--)
+							{
+								int c = t.charAt(j);
+								
+								if(c!=10 && c!=13)
+								{
+									editor.setSelection(++j,j);
+									break;
+								}
+							}
+							break;
+						}
+					}
+			}
+			break;
+		} 
+	} catch (PatternSyntaxException ex) {
+		// Syntax error in the regular expression
+	}
+  }
 
   /**
    * Replace the sketch in the current window with a new untitled document.
@@ -601,6 +650,7 @@ public class Base {
       String path = createNewUntitled();
       if (path != null) {
         activeEditor.handleOpenInternal(path);
+        findInsertPoint(activeEditor);
         activeEditor.untitled = true;
       }
 //      return true;
@@ -624,6 +674,7 @@ public class Base {
     activeEditor.internalCloseRunner();
 
     boolean loaded = activeEditor.handleOpenInternal(path);
+    findInsertPoint(activeEditor);
     if (!loaded) {
       // replace the document without checking if that's ok
       handleNewReplaceImpl();
@@ -748,7 +799,7 @@ public class Base {
     editor.setVisible(true);
 
 //    System.err.println("exiting handleOpen");
-
+	findInsertPoint(editor);
     return editor;
   }
 
@@ -901,7 +952,7 @@ public class Base {
   }
 
 
-  protected void rebuildToolbarMenu(JMenu menu) {
+  protected int rebuildToolbarMenu(JMenu menu) {
     JMenuItem item;
     menu.removeAll();
 
@@ -927,15 +978,25 @@ public class Base {
 
     //System.out.println("rebuilding examples menu");
     // Add each of the subfolders of examples directly to the menu
+    int n = 0;
     try {
-      boolean found = addSketches(menu, examplesFolder, true);
-      if (found) menu.addSeparator();
-      found = addSketches(menu, getSketchbookLibrariesFolder(), true);
-      if (found) menu.addSeparator();
-      addSketches(menu, librariesFolder, true);
+      JMenu temp = new JMenu("Examples");
+      boolean found = addSketches(temp, examplesFolder, true);
+      if (found) {menu.add(temp); n++;};
+
+	  temp = new JMenu("Contributed Libraries");
+      found = addSketches(temp, getSketchbookLibrariesFolder(), true);
+      if (found) {menu.add(temp); n++;};
+      
+      temp = new JMenu("Libraries");
+      addSketches(temp, librariesFolder, true);
+      menu.add(temp);
+      n++;
     } catch (IOException e) {
       e.printStackTrace();
     }
+    
+    return n;
   }
 
 
@@ -952,7 +1013,7 @@ public class Base {
   }
 
 
-  public void rebuildImportMenu(JMenu importMenu) {
+  public int rebuildImportMenu(JMenu importMenu) {
     //System.out.println("rebuilding import menu");
     importMenu.removeAll();
 
@@ -974,14 +1035,15 @@ public class Base {
       File sketchbookLibraries = getSketchbookLibrariesFolder();
       boolean found = addLibraries(importMenu, sketchbookLibraries);
       if (found) {
-        JMenuItem contrib = new JMenuItem(_("Contributed"));
+        /*JMenuItem contrib = new JMenuItem(_("Contributed"));
         contrib.setEnabled(false);
-        importMenu.insert(contrib, separatorIndex);
+        importMenu.insert(contrib, separatorIndex);*/
         importMenu.insertSeparator(separatorIndex);
       }
     } catch (IOException e) {
       e.printStackTrace();
     }
+    return separatorIndex;
   }
 
 
@@ -1029,6 +1091,8 @@ public class Base {
             	  String targetLibDir = new String("");
             	  if(n.equals("msp430")) 
             		  targetLibDir = "hardware/msp430/";
+            	  else if(n.equals("lm4f"))
+            		  targetLibDir = "hardware/lm4f/";
             	  librariesFolder = getContentFile(targetLibDir + "libraries");
             	  onArchChanged();
               }
@@ -1125,10 +1189,11 @@ public class Base {
     //menu.addActionListener(listener);
 
     boolean ifound = false;
+	boolean skipLibraryFolder = folder.equals((Base.getSketchbookFolder()));
 
     for (int i = 0; i < list.length; i++) {
-      if ((list[i].charAt(0) == '.') ||
-          list[i].equals("CVS")) continue;
+      if ((list[i].charAt(0) == '.') || list[i].startsWith("__disabled_") || list[i].equals("CVS") || 
+      	(skipLibraryFolder && list[i].compareToIgnoreCase("libraries")==0)) continue;
 
       File subfolder = new File(folder, list[i]);
       if (!subfolder.isDirectory()) continue;
@@ -1192,6 +1257,7 @@ public class Base {
       public boolean accept(File dir, String name) {
         // skip .DS_Store files, .svn folders, etc
         if (name.charAt(0) == '.') return false;
+        if (name.startsWith("__disabled_")) return false;
         if (name.equals("CVS")) return false;
         return (new File(dir, name).isDirectory());
       }
@@ -1575,22 +1641,58 @@ public class Base {
     }
     return path;
   }
-
+  static public String getLM4FBasePath() {
+	    String path = getHardwarePath() + File.separator + "tools" +
+	                  File.separator + "lm4f" + File.separator + "bin" + File.separator;
+	    if (Base.isLinux() && !(new File(path)).exists()) {
+	      return "";  // use lm4f-gcc and mspdebug in PATH instead of platform version
+	    }
+	    return path;
+	  }
 
   static public String getArch() {
     return archMap.get(Preferences.get("target"));
   }
   
   static public String toShortPath(String longpath) {
-    String shortpath = "";
-    longpath = longpath.replaceAll("\\s", "");
+    String shortpath = "", sub = "";
+    //longpath = longpath.replaceAll("\\s", "");
     longpath = longpath.toUpperCase();
     StringTokenizer tokenizer = new StringTokenizer(longpath, "\\");
     while(tokenizer.hasMoreTokens() == true) {
       String temp = tokenizer.nextToken();
-      if(temp.length() > 8)
-        temp = temp.substring(0, 6) + "~1";
-        shortpath += temp + "\\";
+      if(temp.length() > 8 && temp.indexOf(" ")>-1) // Long and with spaces
+      {
+		int thisFile = 1;
+		sub = temp.substring(0, 6);
+		
+		// Find if there are more files
+		File dir = new File(shortpath);
+  		for (File child : dir.listFiles()) 
+  		{
+  			String originalName = child.getName().toUpperCase();
+  			String tempName = originalName.replaceAll("\\s", "");
+  			int l = tempName.length();
+  			
+  			if(tempName.substring(0, l>6 ? 6:l).compareTo(sub)==0)
+  			{
+  				if(originalName.compareTo(temp)==0)
+  					break;
+  				else
+  					thisFile++;
+  			}
+  		}
+  		String ext = "";
+  		
+  		if(temp.indexOf(".")>0) // There is an extension to add
+  		{
+  			ext = temp.substring(temp.lastIndexOf(".")+1);
+  			ext = "." + ext.substring(0,ext.length()>3?3:ext.length());
+  		}
+  		
+        temp = sub + "~" + thisFile + ext;
+      }
+      shortpath += temp + "\\";
     }
     return shortpath;
   }
@@ -1600,6 +1702,10 @@ public class Base {
       if (getArch() == "msp430") {
         String hwPath = getMSP430BasePath();
         return hwPath;
+      }
+      else if (getArch() == "lm4f") {
+    	  String hwPath = getLM4FBasePath();
+    	  return hwPath;
       }
       else {
         return getHardwarePath() + File.separator + "tools" + File.separator
@@ -1639,7 +1745,19 @@ public class Base {
 
 
   static public File getSketchbookLibrariesFolder() {
-    return new File(getSketchbookFolder(), "libraries");
+    File libdir = new File(getSketchbookFolder(), "libraries");
+    if (!libdir.exists()) {
+      try {
+        libdir.mkdirs();
+        /*File readme = new File(libdir, "readme.txt");
+        FileWriter freadme = new FileWriter(readme);
+        freadme.write(_("For information on installing libraries, see: " +
+                        "http://arduino.cc/en/Guide/Libraries\n"));
+        freadme.close();*/
+      } catch (Exception e) {
+      }
+    }
+    return libdir;
   }
 
 
@@ -1801,8 +1919,17 @@ public class Base {
     // already have the right icon from the .app file.
     if (Base.isMacOS()) return;
     
-    Image image = Toolkit.getDefaultToolkit().createImage(PApplet.ICON_IMAGE);
-    frame.setIconImage(image);
+    ArrayList<Image> images = new ArrayList<Image>();
+    images.add(createImageFromLib("energia_16.png"));
+    images.add(createImageFromLib("energia_24.png"));
+    images.add(createImageFromLib("energia_32.png"));
+    images.add(createImageFromLib("energia_48.png"));
+    frame.setIconImages(images);
+  }
+  
+  static private Image createImageFromLib(String filename)
+  {
+  	return Toolkit.getDefaultToolkit().createImage(new File("lib/" + filename).getAbsolutePath());
   }
 
 

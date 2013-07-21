@@ -46,6 +46,7 @@ public class Compiler implements MessageConsumer {
   String buildPath;
   String primaryClassName;
   boolean verbose;
+  boolean sketchIsCompiled;
 
   RunnerException exception;
 
@@ -68,6 +69,7 @@ public class Compiler implements MessageConsumer {
     this.buildPath = buildPath;
     this.primaryClassName = primaryClassName;
     this.verbose = verbose;
+    this.sketchIsCompiled = false;
 
     // the pms object isn't used for anything but storage
     MessageStream pms = new MessageStream(this);
@@ -131,6 +133,7 @@ public class Compiler implements MessageConsumer {
                findFilesInPath(buildPath, "c", false),
                findFilesInPath(buildPath, "cpp", false),
                boardPreferences));
+   sketchIsCompiled = true;
 
    // 2. compile the libraries, outputting .o files to: <buildPath>/<library>/
 
@@ -176,13 +179,19 @@ public class Compiler implements MessageConsumer {
   String arch = Base.getArch();
   String runtimeLibraryName = buildPath + File.separator + "core.a";
   List baseCommandAR;
-  if(arch == "msp430") { 
+  if(arch == "msp430")  {
     baseCommandAR = new ArrayList(Arrays.asList(new String[] {
       basePath + "msp430-ar",
       "rcs",
       runtimeLibraryName
     }));
-    } else {
+    } else if(arch == "lm4f") {
+      baseCommandAR = new ArrayList(Arrays.asList(new String[] { 
+        basePath + "arm-none-eabi-ar",
+        "rcs",
+        runtimeLibraryName
+    }));  	
+    }else {
       baseCommandAR = new ArrayList(Arrays.asList(new String[] {
         basePath + "avr-ar",
         "rcs",
@@ -207,7 +216,6 @@ public class Compiler implements MessageConsumer {
     sketch.setCompilingProgress(60);
     List baseCommandLinker;
     if (arch == "msp430") { 
-        List objects = new ArrayList(baseCommandAR);
         baseCommandLinker = new ArrayList(Arrays.asList(new String[] {
         basePath + "msp430-gcc",
         "-Os",
@@ -218,11 +226,24 @@ public class Compiler implements MessageConsumer {
         "-o",
         buildPath + File.separator + primaryClassName + ".elf"
       }));
+    }else if (arch == "lm4f") { 
+        baseCommandLinker = new ArrayList(Arrays.asList(new String[] {
+        basePath + "arm-none-eabi-g++",
+        "-Os",
+        "-nostartfiles","-nostdlib",
+        "-Wl,--gc-sections",
+        "-T", corePath + File.separator + "lm4fcpp.ld",
+        "--entry=ResetISR",
+        "-mthumb", "-mcpu=cortex-m4",
+        "-mfloat-abi=hard","-mfpu=fpv4-sp-d16","-fsingle-precision-constant",
+        "-o",
+        buildPath + File.separator + primaryClassName + ".elf",
+      }));
     } else {
       baseCommandLinker = new ArrayList(Arrays.asList(new String[] {
         basePath + "avr-gcc",
         "-Os",
-      "-Wl,--gc-sections"+optRelax,
+        "-Wl,--gc-sections"+optRelax,
         "-mmcu=" + boardPreferences.get("build.mcu"),
         "-o",
         buildPath + File.separator + primaryClassName + ".elf"
@@ -235,17 +256,27 @@ public class Compiler implements MessageConsumer {
 
     baseCommandLinker.add(runtimeLibraryName);
     baseCommandLinker.add("-L" + buildPath);
-    baseCommandLinker.add("-lm");
-
+    if(arch == "lm4f"){
+      baseCommandLinker.add("-lm");
+      baseCommandLinker.add("-lc");
+      baseCommandLinker.add("-lgcc");
+    } else {
+      baseCommandLinker.add("-lm");
+    }
     execAsynchronously(baseCommandLinker);
 
     List baseCommandObjcopy;
-    if (arch == "msp430") { 
+    if (arch == "msp430") {
     baseCommandObjcopy = new ArrayList(Arrays.asList(new String[] {
       basePath + "msp430-objcopy",
       "-O",
       "-R",
     }));
+    } else if (arch == "lm4f") {
+      baseCommandObjcopy = new ArrayList(Arrays.asList(new String[] {
+        basePath + "arm-none-eabi-objcopy",
+        "-O",
+      }));
     } else {
       baseCommandObjcopy = new ArrayList(Arrays.asList(new String[] {
         basePath + "avr-objcopy",
@@ -255,7 +286,7 @@ public class Compiler implements MessageConsumer {
 
     }
     List commandObjcopy;
-    if (arch == "msp430") {
+    if ((arch == "msp430") || (arch == "lm4f")) {
       //nothing 
     } else {
         // 5. extract EEPROM data (from EEMEM directive) to .eep file.
@@ -272,15 +303,20 @@ public class Compiler implements MessageConsumer {
       commandObjcopy.add(buildPath + File.separator + primaryClassName + ".eep");
       execAsynchronously(commandObjcopy);
     }
-    
-    // 6. build the .hex file
+    // 6. build the .hex or .bin file
     sketch.setCompilingProgress(80);
     commandObjcopy = new ArrayList(baseCommandObjcopy);
-    commandObjcopy.add(2, "ihex");
-    commandObjcopy.add(".eeprom"); // remove eeprom data
-    commandObjcopy.add(buildPath + File.separator + primaryClassName + ".elf");
-    commandObjcopy.add(buildPath + File.separator + primaryClassName + ".hex");
-    execAsynchronously(commandObjcopy);
+    if (arch == "lm4f"){
+	  	commandObjcopy.add(2, "binary");
+    	commandObjcopy.add(buildPath + File.separator + primaryClassName + ".elf");
+    	commandObjcopy.add(buildPath + File.separator + primaryClassName + ".bin");
+    }else {
+	    commandObjcopy.add(2, "ihex");
+	    commandObjcopy.add(".eeprom"); // remove eeprom data
+	  	commandObjcopy.add(buildPath + File.separator + primaryClassName + ".elf");
+	    commandObjcopy.add(buildPath + File.separator + primaryClassName + ".hex");
+    }
+	execAsynchronously(commandObjcopy);
     
     sketch.setCompilingProgress(90);
    
@@ -542,14 +578,20 @@ public class Compiler implements MessageConsumer {
               "to Wire.read() for consistency with other libraries.\n\n");
       }
 
-      RunnerException e = sketch.placeException(error, pieces[1], PApplet.parseInt(pieces[2]) - 1);
+      RunnerException e = null;
+      if (!sketchIsCompiled) {
+        // Place errors when compiling the sketch, but never while compiling libraries
+        // or the core.  The user's sketch might contain the same filename!
+        e = sketch.placeException(error, pieces[1], PApplet.parseInt(pieces[2]) - 1);
+      }
 
       // replace full file path with the name of the sketch tab (unless we're
       // in verbose mode, in which case don't modify the compiler output)
       if (e != null && !verbose) {
         SketchCode code = sketch.getCode(e.getCodeIndex());
-        String fileName = code.isExtension(sketch.getDefaultExtension()) ? code.getPrettyName() : code.getFileName();
-        s = fileName + ":" + e.getCodeLine() + ": error: " + pieces[3] + msg;        
+        String fileName = (code.isExtension("ino") || code.isExtension("pde")) ? code.getPrettyName() : code.getFileName();
+        int lineNum = e.getCodeLine() + 1;
+        s = fileName + ":" + lineNum + ": error: " + pieces[3] + msg;
       }
             
       if (exception == null && e != null) {
@@ -576,7 +618,21 @@ public class Compiler implements MessageConsumer {
           basePath + "msp430-gcc",
           "-c", // compile, don't link
           "-g", // include debugging info (so errors include line numbers)
+          "-assembler-with-cpp",
           "-mmcu=" + boardPreferences.get("build.mcu"),
+          "-DF_CPU=" + boardPreferences.get("build.f_cpu"),
+          "-DARDUINO=" + Base.REVISION,
+          "-DENERGIA=" + Base.EREVISION,
+        }));
+    } else if (arch == "lm4f") {
+        baseCommandCompiler = new ArrayList(Arrays.asList(new String[] {
+          basePath + "arm-none-eabi-gcc",
+          "-c",
+          "-g",
+          "-assembler-with-cpp",
+          Preferences.getBoolean("build.verbose") ? "-Wall" : "-w", // show warnings if verbose
+          "-mthumb", "-mcpu=cortex-m4",
+          "-mfloat-abi=hard","-mfpu=fpv4-sp-d16","-fsingle-precision-constant",
           "-DF_CPU=" + boardPreferences.get("build.f_cpu"),
           "-DARDUINO=" + Base.REVISION,
           "-DENERGIA=" + Base.EREVISION,
@@ -620,10 +676,27 @@ public class Compiler implements MessageConsumer {
         "-fdata-sections",
         "-mmcu=" + boardPreferences.get("build.mcu"),
         "-DF_CPU=" + boardPreferences.get("build.f_cpu"),
+        "-MMD", // output dependancy info
         "-DARDUINO=" + Base.REVISION,
         "-DENERGIA=" + Base.EREVISION,
       }));
-      } else { // default to avr
+      }else if (arch == "lm4f") {
+        baseCommandCompiler = new ArrayList(Arrays.asList(new String[] {
+        basePath + "arm-none-eabi-gcc",
+        "-c",
+        "-g",
+        "-Os",
+        Preferences.getBoolean("build.verbose") ? "-Wall" : "-w", // show warnings if verbose
+        "-ffunction-sections",
+        "-fdata-sections",
+        "-mthumb", "-mcpu=cortex-m4",
+        "-mfloat-abi=hard","-mfpu=fpv4-sp-d16","-fsingle-precision-constant",
+        "-DF_CPU=" + boardPreferences.get("build.f_cpu"),
+        "-MMD", // output dependancy info
+        "-DARDUINO=" + Base.REVISION,
+        "-DENERGIA=" + Base.EREVISION,
+      }));
+      }else { // default to avr
         baseCommandCompiler = new ArrayList(Arrays.asList(new String[] {
         basePath + "avr-gcc",
         "-c", // compile, don't link
@@ -668,9 +741,29 @@ public class Compiler implements MessageConsumer {
         "-fdata-sections",
         "-mmcu=" + boardPreferences.get("build.mcu"),
         "-DF_CPU=" + boardPreferences.get("build.f_cpu"),
+        "-MMD", // output dependancy info
         "-DARDUINO=" + Base.REVISION,
         "-DENERGIA=" + Base.EREVISION,
       }));
+    } 
+    else if (arch == "lm4f") {
+        baseCommandCompilerCPP = new ArrayList(Arrays.asList(new String[] {
+          basePath + "arm-none-eabi-g++",
+          "-c",
+          "-g", // include debugging info (so errors include line numbers)
+          "-Os", // optimize for size
+          Preferences.getBoolean("build.verbose") ? "-Wall" : "-w", // show warnings if verbose
+          "-fno-rtti",
+          "-fno-exceptions",
+          "-ffunction-sections", // place each function in its own section
+          "-fdata-sections",
+          "-mthumb", "-mcpu=cortex-m4",
+          "-mfloat-abi=hard","-mfpu=fpv4-sp-d16","-fsingle-precision-constant",
+          "-DF_CPU=" + boardPreferences.get("build.f_cpu"),
+          "-MMD", // output dependancy info
+          "-DARDUINO=" + Base.REVISION,
+          "-DENERGIA=" + Base.EREVISION,
+        }));
     } else { // default to avr
       baseCommandCompilerCPP = new ArrayList(Arrays.asList(new String[] {
         basePath + "avr-g++",

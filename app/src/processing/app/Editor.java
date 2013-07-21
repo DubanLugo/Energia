@@ -177,7 +177,7 @@ public class Editor extends JFrame implements RunnerListener {
           // re-add the sub-menus that are shared by all windows
           fileMenu.insert(sketchbookMenu, 2);
           fileMenu.insert(examplesMenu, 3);
-          sketchMenu.insert(importMenu, 4);
+          sketchMenu.insert(importMenu, 7);
           toolsMenu.insert(boardsMenu, numTools);
           toolsMenu.insert(serialMenu, numTools + 1);
         }
@@ -216,7 +216,8 @@ public class Editor extends JFrame implements RunnerListener {
 
     if (toolbarMenu == null) {
       toolbarMenu = new JMenu();
-      base.rebuildToolbarMenu(toolbarMenu);
+      int n =base.rebuildToolbarMenu(toolbarMenu);
+      MenuScroller.setScrollerFor(toolbarMenu, -1,-1, 2,n>0?n+1:0);
     }
     toolbar = new EditorToolbar(this, toolbarMenu);
     upper.add(toolbar);
@@ -501,13 +502,14 @@ public class Editor extends JFrame implements RunnerListener {
 
     if (sketchbookMenu == null) {
       sketchbookMenu = new JMenu(_("Sketchbook"));
+      MenuScroller.setScrollerFor(sketchbookMenu);
       base.rebuildSketchbookMenu(sketchbookMenu);
     }
     fileMenu.add(sketchbookMenu);
 
     if (examplesMenu == null) {
       examplesMenu = new JMenu(_("Examples"));
-      base.rebuildExamplesMenu(examplesMenu);
+      rebuildExamplesMenu();
     }
     fileMenu.add(examplesMenu);
 
@@ -535,19 +537,30 @@ public class Editor extends JFrame implements RunnerListener {
       });
     fileMenu.add(saveAsMenuItem);
 
+	fileMenu.addSeparator();
+
     item = newJMenuItem(_("Upload"), 'U');
     item.addActionListener(new ActionListener() {
         public void actionPerformed(ActionEvent e) {
-          handleExport(false);
+          handleExport(false,false);
+        }
+      });
+    fileMenu.add(item);
+    
+    item = newJMenuItem(_("Upload and then Open Serial Monitor"), 'M');
+    item.addActionListener(new ActionListener() {
+        public void actionPerformed(ActionEvent e) {
+          handleExport(false,true);
         }
       });
     fileMenu.add(item);
 
-    if(!Preferences.get("target").equals("msp430")) {
+    if(!Preferences.get("target").equals("msp430") 
+    		|| !Preferences.get("target").equals("lm4f")) {
         item = newJMenuItemShift(_("Upload Using Programmer"), 'U');
         item.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
-              handleExport(true);
+              handleExport(true,false);
             }
         });
 
@@ -596,8 +609,29 @@ public class Editor extends JFrame implements RunnerListener {
     }
     return fileMenu;
   }
+  
+  private void rebuildExamplesMenu(){
+      base.rebuildExamplesMenu(examplesMenu);
 
-
+      int upper = 0, lower = 0;
+      for(int i=0;i<examplesMenu.getMenuComponentCount();i++)
+      {
+      	//System.out.println(examplesMenu.getMenuComponent(i).getClass().getName());
+      	if(examplesMenu.getMenuComponent(i).getClass().getName().contains("Separator"))
+	      	if(upper==0)
+	      	{
+		    	upper = i;
+	      	}
+	      	else
+	      	{
+	      		lower = examplesMenu.getItemCount()-i;
+	      		break;
+	      	}
+      }
+      MenuScroller.setScrollerFor(examplesMenu,-1,-1,upper>0?upper+1:0,lower);
+  }
+  	
+  
   protected JMenu buildSketchMenu() {
     JMenuItem item;
     sketchMenu = new JMenu(_("Sketch"));
@@ -610,6 +644,34 @@ public class Editor extends JFrame implements RunnerListener {
       });
     sketchMenu.add(item);
 
+	sketchMenu.addSeparator();
+
+	item = new JMenuItem(_("Copy Hex File as Path"));
+    item.addActionListener(new ActionListener() {
+        public void actionPerformed(ActionEvent e) {
+        	String s = sketch.getSketchHexFilePath(true);
+        	if(sketch==null?false: s.length()>0)
+        	{
+          		Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(s),null);
+        	}
+        	else
+        	{
+        		 Base.showMessage(_("No Hex File"),
+                           _("There is no Hex for this Sketch yet. Verify the Sketch first"));
+        	}
+        }
+      });
+    sketchMenu.add(item);
+    
+    
+    
+    item = newJMenuItemAlt(_("Show Compilation Folder"), 'R');
+    item.addActionListener(new ActionListener() {
+        public void actionPerformed(ActionEvent e) {
+          Base.openFolder(sketch.getTempBuildFolder());
+        }
+      });
+    sketchMenu.add(item);
 //    item = newJMenuItemShift("Verify / Compile (verbose)", 'R');
 //    item.addActionListener(new ActionListener() {
 //        public void actionPerformed(ActionEvent e) {
@@ -651,6 +713,52 @@ public class Editor extends JFrame implements RunnerListener {
       });
     sketchMenu.add(item);
 
+	sketchMenu.addSeparator();
+
+    if (importMenu == null) {
+      importMenu = new JMenu(_("Import Library"));
+      int n = base.rebuildImportMenu(importMenu);
+      MenuScroller.setScrollerFor(importMenu,-1,-1,n+1,0);
+    }
+    sketchMenu.add(importMenu);
+    
+	// This is the library manager, since is not OS agnostic, for now it is disabled
+	/*if(Base.isWindows()) 
+	{
+	    item = new JMenuItem(_("Manage Libraries..."));
+	    item.addActionListener(new ActionListener() {
+	        public void actionPerformed(ActionEvent e) {
+          
+				try {
+					(new Thread(new Runnable() { 
+					public void run() { 
+						try
+						{
+							String path = Base.getSketchbookLibrariesPath(), libs = "";
+						
+							for(File lib : Base.getLibraries())
+							{
+								if(lib.getPath().contains(path))
+									libs += (libs.length()==0? "":"|") + lib.getName();
+							}
+						
+						Process p = Runtime.getRuntime().exec(new String[] {Base.getHardwarePath() + "/../erw/" + "libman", "\"" + path + "\"","\"" + libs + "\""});
+						p.waitFor();
+						}
+						catch (Throwable t) {
+						}
+						
+						base.rebuildImportMenu(importMenu);
+						rebuildExamplesMenu();
+						base.rebuildToolbarMenu(toolbarMenu);
+					}})).start(); 
+				} catch (Throwable t) {
+				}
+	        }
+	      });
+	    sketchMenu.add(item);
+	}*/
+
     return sketchMenu;
   }
 
@@ -683,6 +791,7 @@ public class Editor extends JFrame implements RunnerListener {
     
     if (boardsMenu == null) {
       boardsMenu = new JMenu(_("Board"));
+      MenuScroller.setScrollerFor(boardsMenu);
       base.rebuildBoardsMenu(boardsMenu);
     }
     menu.add(boardsMenu);
@@ -717,7 +826,6 @@ public class Editor extends JFrame implements RunnerListener {
         populateSerialMenu();
       }
     });
-
     return menu;
   }
 
@@ -1078,13 +1186,15 @@ public class Editor extends JFrame implements RunnerListener {
     item = newJMenuItemShift(_("Find in Reference"), 'F');
     item.addActionListener(new ActionListener() {
         public void actionPerformed(ActionEvent e) {
-          if (textarea.isSelectionActive()) {
-            handleFindReference();
-          }
+//          if (textarea.isSelectionActive()) {
+//            handleFindReference();
+//          }
+        	handleFindReference();
         }
       });
     menu.add(item);
-
+    menu.addSeparator();
+	
     item = new JMenuItem(_("Frequently Asked Questions"));
     item.addActionListener(new ActionListener() {
         public void actionPerformed(ActionEvent e) {
@@ -1840,19 +1950,19 @@ public class Editor extends JFrame implements RunnerListener {
 
 
   protected void handleFindReference() {
-    String text = textarea.getSelectedText().trim();
+    String text = searchReference(textarea,true);
 
     if (text.length() == 0) {
       statusNotice(_("First select a word to find in the reference."));
 
     } else {
       String referenceFile = PdeKeywords.getReference(text);
-      //System.out.println("reference file is " + referenceFile);
-      if (referenceFile == null) {
-        statusNotice(
-	  I18n.format(_("No reference available for \"{0}\""), text)
-	);
-      } else {
+      if (referenceFile == null) 
+      {
+        statusNotice(I18n.format(_("No reference available for \"{0}\""), text));
+      } 
+      else 
+      {
         Base.showReference(I18n.format(_("{0}.html"), referenceFile));
       }
     }
@@ -2335,6 +2445,7 @@ public class Editor extends JFrame implements RunnerListener {
     if (result == null) return false;
     selectSerialPort(result);
     base.onBoardOrPortChange();
+    console.clear(); // Fix
     return true;
   }
 
@@ -2354,17 +2465,29 @@ public class Editor extends JFrame implements RunnerListener {
    * Made synchronized to (hopefully) avoid problems of people
    * hitting export twice, quickly, and horking things up.
    */
-  synchronized public void handleExport(final boolean usingProgrammer) {
+  
+  synchronized public void handleExport(final boolean usingProgrammer, final boolean showSerialMonitor) {
     //if (!handleExportCheckModified()) return;
     toolbar.activate(EditorToolbar.EXPORT);
     console.clear();
     status.progress(_("Uploading to I/O Board..."));
-
+	
+	if(!usingProgrammer)
+		exportHandler = new DefaultExportHandler(showSerialMonitor);
+		
     new Thread(usingProgrammer ? exportAppHandler : exportHandler).start();
   }
 
   // DAM: in Arduino, this is upload
   class DefaultExportHandler implements Runnable {
+
+  	DefaultExportHandler(Boolean openSerial) { 
+  		serialMonitor.isOpenPending = openSerial; // Open serial monitor when ending
+  	}
+  	DefaultExportHandler() { 
+  		if(serialMonitor != null)
+  			serialMonitor.isOpenPending = false; // Do not serial monitor when ending, as default
+  	}
     public void run() {
 
       try {
@@ -2376,8 +2499,13 @@ public class Editor extends JFrame implements RunnerListener {
         boolean success = sketch.exportApplet(false);
         if (success) {
           statusNotice(_("Done uploading."));
+          if(serialMonitor.isOpenPending)
+          {
+          	serialMonitor.openSerialPort();
+        	serialMonitor.setVisible(true);
+          }
         } else {
-            statusError(_("Upload failed."));
+          // error message will already be visible
         }
       } catch (SerialNotFoundException e) {
         populateSerialMenu();
@@ -2396,6 +2524,7 @@ public class Editor extends JFrame implements RunnerListener {
       uploading = false;
       //toolbar.clear();
       toolbar.deactivate(EditorToolbar.EXPORT);
+      serialMonitor.isOpenPending = false;
     }
   }
 
@@ -2471,8 +2600,11 @@ public class Editor extends JFrame implements RunnerListener {
 
 
   public void handleSerial() {
-    if (uploading) return;
-    
+    if (uploading)
+    {
+    	serialMonitor.isOpenPending = true; // Open serial when ending 
+    	return;
+    }
     try {
       serialMonitor.openSerialPort();
       serialMonitor.setVisible(true);
@@ -2644,6 +2776,7 @@ public class Editor extends JFrame implements RunnerListener {
   // . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
   protected void onArchChanged() {
       base.rebuildImportMenu(importMenu);
+      base.rebuildExamplesMenu(examplesMenu);
   }
   
   protected void onBoardOrPortChange() {
@@ -2769,7 +2902,8 @@ public class Editor extends JFrame implements RunnerListener {
 
     // if no text is selected, disable copy and cut menu items
     public void show(Component component, int x, int y) {
-      int lineNo = textarea.getLineOfOffset(textarea.xyToOffset(x, y));
+      int offset2 = textarea.xyToOffset(x, y);
+      int lineNo = textarea.getLineOfOffset(offset2);
       int offset = textarea.xToOffset(lineNo, x);
       String line = textarea.getLineText(lineNo);
       clickedURL = textarea.checkClickedURL(line, offset);
@@ -2782,21 +2916,109 @@ public class Editor extends JFrame implements RunnerListener {
       }
       
       if (textarea.isSelectionActive()) {
-        cutItem.setEnabled(true);
-        copyItem.setEnabled(true);
-        discourseItem.setEnabled(true);
-
-        String sel = textarea.getSelectedText().trim();
-        referenceFile = PdeKeywords.getReference(sel);
-        referenceItem.setEnabled(referenceFile != null);
+      	// move caret if is not inside selection
+      	int selStart = textarea.getSelectionStart();
+	
+      	if(!(selStart<offset2 && (int)textarea.getSelectedText().length()+selStart>offset2))
+      		textarea.setCaretPosition(offset2);
 
       } else {
-        cutItem.setEnabled(false);
-        copyItem.setEnabled(false);
-        discourseItem.setEnabled(false);
-        referenceItem.setEnabled(false);
+      	textarea.setCaretPosition(offset2);
       }
+      
+      	// Reference
+      	referenceFile = searchReference(textarea);
+      	referenceItem.setEnabled(referenceFile != null);
+      
       super.show(component, x, y);
     }
   }
+
+  // Search a JEditTextArea for a selected reference, returning the reference is valid, or null 
+  public String searchReference(JEditTextArea jtext)
+    {
+    	return searchReference(jtext, false);
+   	}
+
+  // Search a JEditTextArea for a selected reference
+  public String searchReference(JEditTextArea jtext, boolean returnSelection)
+    {
+      String t = jtext.getText();
+      String ref = null;
+      if(t.length()>0)
+      {
+      	String sel = "";
+      	if (jtext.isSelectionActive())
+      	{
+      		sel = jtext.getSelectedText();
+      	}
+      		
+      	if(ref == null)
+      	{
+      		// Nothing is selected so we will try to find a valid keyword from caret position
+	      	int start = Math.max(0,jtext.getCaretPosition()-1);
+	      	sel = findKeyword(t,start, start);
+      	}
+      	
+      	sel = sel.trim();
+      	
+      	if(returnSelection)
+      		return sel;
+      	else
+      	{
+      	if(sel.length()>0)
+	        	ref = PdeKeywords.getReference(sel);
+      	}
+      } 	
+	  return returnSelection ? "": ref;
+    }
+    
+    // Returns true if character is valid for a reference keyword
+    private boolean isValid(char c)
+    {
+    	return (c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9') || c=='_';
+    }
+    
+    // Recursively finds a valid keyword
+    private String findKeyword(String text, int start, int end)
+    {
+    	int l = text.length();
+    	
+    	if(l>0)
+    	{
+	    	boolean validStart = true, validEnd = true;
+	    	if(start>0 && start<end)
+	    	{
+	    		if(isValid(text.charAt(start)))
+	    		{
+	    			start--;
+	    			validStart = false;	
+	    		}		
+	    	}
+	    	
+	    	if(end<l-1)
+	    	{
+	    		if(isValid(text.charAt(end)))
+	    		{
+	    			end++;
+	    			validEnd = false;	
+	    		}
+	    	}
+	    	
+	    	if(validStart && validEnd)
+	    	{
+	    		int nend = Math.min(l,end+(isValid(text.charAt(end))?1:0)), 
+	    			nstart = Math.max(0,start+(isValid(text.charAt(start))?0:1));
+	    			
+	    		if(nstart<nend && nend-nstart>0)
+	    			return text.substring(nstart,nend);
+	    	}
+	    	else
+	    	{
+	    		return findKeyword(text,start,end); // Keep looking
+	    	}
+    	}
+    	
+    	return "";
+    }
 }

@@ -44,8 +44,8 @@
 #endif
 
 #if defined(__MSP430_HAS_ADC10__) || defined(__MSP430_HAS_ADC10_B__)
-uint16_t analog_reference = DEFAULT, analog_period = F_CPU/490, analog_div = 0, analog_res=255; // devide clock with 0, 2, 4, 8
-#endif
+uint16_t analog_reference = DEFAULT; 
+
 
 void analogReference(uint16_t mode)
 {
@@ -54,6 +54,9 @@ void analogReference(uint16_t mode)
 	// there's something connected to AREF.
 	analog_reference = mode;
 }
+#endif
+
+uint16_t analog_period = F_CPU/490, analog_div = 0, analog_res=255; // devide clock with 0, 2, 4, 8
 
 //TODO: Can be a lot more efficiant.
 //      - lower clock rated / input devider to conserve Energia.
@@ -76,6 +79,7 @@ void analogResolution(uint16_t res)
   analog_res = res;
 }
 
+
 //Arduino specifies ~490 Hz for analog out PWM so we follow suit.
 #define PWM_PERIOD analog_period // F_CPU/490
 #define PWM_DUTY(x) ( (unsigned long)x*PWM_PERIOD / (unsigned long)analog_res )
@@ -88,7 +92,7 @@ void analogWrite(uint8_t pin, int val)
 		digitalWrite(pin, LOW); // set pin to LOW when duty cycle is 0
                                         // digitalWrite will take care of invalid pins
 	}
-	else if (val == 255)
+	else if (val == analog_res)
 	{
 		digitalWrite(pin, HIGH); // set pin HIGH when duty cycle is 255
                                          // digitalWrite will take care of invalid pins
@@ -199,7 +203,7 @@ void analogWrite(uint8_t pin, int val)
  
                         case NOT_ON_TIMER:                      // not on a timer output pin
 			default:                                // or TxA0 pin
-				if (val < 128) {
+				if (val <= (analog_res >> 1)) {
 					digitalWrite(pin, LOW); // 
 				} else {
 					digitalWrite(pin, HIGH);
@@ -235,7 +239,7 @@ uint16_t analogRead(uint8_t pin)
     ADC10CTL0 = analog_reference |          // set analog reference
             ADC10ON | ADC10SHT_3 | ADC10IE; // turn ADC ON; sample + hold @ 64 × ADC10CLKs; Enable interrupts
     ADC10CTL1 |= (pin << 12);               // select channel
-    ADC10AE0 = pin;                         // TODO: should this be masked off to only allow valid chan?
+    ADC10AE0 = (1 << pin);                  // Disable input/output buffer on pin
 #endif
 #if defined(__MSP430_HAS_ADC10_B__)
     while(REFCTL0 & REFGENBUSY);            // If ref generator busy, WAIT
@@ -270,6 +274,8 @@ uint16_t analogRead(uint8_t pin)
 #endif
 }
 
+#if defined(__MSP430_HAS_ADC10__) || defined(__MSP430_HAS_ADC10_B__)
+
 __attribute__((interrupt(ADC10_VECTOR)))
 void ADC10_ISR(void)
 {
@@ -295,3 +301,5 @@ void ADC10_ISR(void)
     ADC10IFG = 0;                           // Clear Flags
 #endif
 }
+
+#endif
